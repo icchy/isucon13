@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"golang.org/x/sync/errgroup"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-sql-driver/mysql"
@@ -18,10 +20,12 @@ import (
 
 const (
 	powerDNSSubdomainAddressEnvKey = "ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS"
+	powerDNSZonePathEnvKey         = "ISUCON13_POWERDNS_ZONE_PATH"
 )
 
 var (
 	powerDNSSubdomainAddress string
+	powerDNSZonePath         string
 	dbConn                   *sqlx.DB
 )
 
@@ -98,15 +102,24 @@ func connectDB() (*sqlx.DB, error) {
 
 func parseQuery(m *dns.Msg, db sqlx.DB) {
 	for _, q := range m.Question {
+		log.Printf("Query for %s (type: %s)\n", q.Name, dns.TypeToString[q.Qtype])
 		switch q.Qtype {
+		case dns.TypeSOA:
+			rr, err := dns.NewRR(fmt.Sprintf("%s SOA %s %s 0 10800 3600 604800 3600", q.Name, "ns1 hostmaster.u.isucon.dev.", "isucon.isucon.net."))
+			if err != nil {
+				log.Printf("Failed to create SOA record: %s\n", err.Error())
+				continue
+			}
+			m.Answer = append(m.Answer, rr)
+		case dns.TypeNS:
+			rr, err := dns.NewRR(fmt.Sprintf("%s NS %s", q.Name, "ns1.u.isucon.dev."))
+			if err != nil {
+				log.Printf("Failed to create NS record: %s\n", err.Error())
+				continue
+			}
+			m.Answer = append(m.Answer, rr)
 		case dns.TypeA:
 			log.Printf("Query for %s\n", q.Name)
-			//username := q.Name[:len(q.Name)-len(".u.isucon.dev.")]
-			//ip := records[q.Name]
-			//records.Range(func(key, value interface{}) bool {
-			//	log.Printf("key: %s, value: %s\n", key, value)
-			//	return true
-			//})
 			_, ok := records.Load(q.Name)
 			if ok {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, powerDNSSubdomainAddress))
@@ -114,13 +127,6 @@ func parseQuery(m *dns.Msg, db sqlx.DB) {
 					m.Answer = append(m.Answer, rr)
 				}
 			} else {
-				// not found
-				//var user User
-				//err := db.Get(&user, "SELECT name FROM users WHERE name = ?", username)
-				//// check no rows
-				//if errors.Is(err, sql.ErrNoRows) {
-				//	// not found
-
 				rr, err := dns.NewRR(fmt.Sprintf("%s A", q.Name))
 				if err != nil {
 					log.Printf("Failed to create NXDOMAIN record: %s\n", err.Error())
@@ -129,20 +135,6 @@ func parseQuery(m *dns.Msg, db sqlx.DB) {
 				m.Rcode = dns.RcodeNameError
 				m.Answer = append(m.Answer, rr)
 				continue
-				//}
-				//if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				//	log.Printf("Failed to get record from DB: %s\n", err.Error())
-				//	continue
-				//}
-				//
-				//// found
-				//rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, powerDNSSubdomainAddress))
-				//if err == nil {
-				//	m.Answer = append(m.Answer, rr)
-				//	records.Store(q.Name, powerDNSSubdomainAddress)
-				//	continue
-				//}
-				//log.Printf("found record but got error (name: %s): %s\n", q.Name, err)
 			}
 		}
 	}
@@ -186,6 +178,38 @@ func HandleAddRecord(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func loadZoneFile(zoneFilePath string) error {
+	// example
+	// ns1      0 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
+	//pipe     0 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
+	//test001  0 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
+
+	f, err := os.Open(zoneFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open zone file: %w", err)
+	}
+	defer f.Close()
+	body, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("failed to read zone file: %w", err)
+	}
+
+	for _, line := range strings.Split(string(body), "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "0 IN A") {
+			s := strings.Split(line, " ")
+			if len(s) != 5 {
+				return fmt.Errorf("invalid zone file format")
+			}
+			records.Store(s[0], powerDNSSubdomainAddress)
+		}
+	}
+
+	return nil
+}
+
 func main() {
 	// attach request handler func
 	dns.HandleFunc("u.isucon.dev.", handleDnsRequest)
@@ -195,6 +219,15 @@ func main() {
 		log.Fatalf("environ %s must be provided", powerDNSSubdomainAddressEnvKey)
 	}
 	powerDNSSubdomainAddress = subdomainAddr
+
+	zonePath, ok := os.LookupEnv(powerDNSZonePathEnvKey)
+	if !ok {
+		log.Fatalf("environ %s must be provided", powerDNSZonePathEnvKey)
+	}
+	powerDNSZonePath = zonePath
+	if err := loadZoneFile(powerDNSZonePath); err != nil {
+		log.Fatalf("failed to load zone file: %s", err.Error())
+	}
 
 	db, err := connectDB()
 	if err != nil {
