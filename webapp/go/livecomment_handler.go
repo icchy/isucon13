@@ -223,6 +223,14 @@ func postLivecommentHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
 	}
 
+	if _, err := tx.ExecContext(ctx, "UPDATE livestreams SET tips = tips + ? WHERE id = ?", req.Tip, livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update livestream tips count: "+err.Error())
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE livestreams SET max_tip = IF(max_tip > ?, max_tip, ?) WHERE id = ?", req.Tip, req.Tip, livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update livestream max_tip count: "+err.Error())
+	}
+
 	var liveStreamUserId int64
 	if err := tx.GetContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID: "+err.Error())

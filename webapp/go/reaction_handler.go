@@ -124,6 +124,10 @@ func postReactionHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert reaction: "+err.Error())
 	}
 
+	if _, err := tx.ExecContext(ctx, "UPDATE livestreams SET reactions = reactions + 1 WHERE id = ?", livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update livestream reaction counter: "+err.Error())
+	}
+
 	var liveStreamUserId int64
 	if err := tx.GetContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID: "+err.Error())

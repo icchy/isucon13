@@ -40,6 +40,9 @@ type LivestreamModel struct {
 	ThumbnailUrl string `db:"thumbnail_url" json:"thumbnail_url"`
 	StartAt      int64  `db:"start_at" json:"start_at"`
 	EndAt        int64  `db:"end_at" json:"end_at"`
+	Reactions    int64  `db:"reactions"`
+	Tips         int64  `db:"tips"`
+	MaxTip       int64  `db:"max_tip"`
 }
 
 type Livestream struct {
