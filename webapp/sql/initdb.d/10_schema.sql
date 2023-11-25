@@ -17,9 +17,7 @@ CREATE TABLE `icons` (
   `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` BIGINT NOT NULL,
   `image` LONGBLOB NOT NULL,
-  `icon_hash` BINARY(32) NOT NULL,
-  UNIQUE `idx_user_id` (`user_id`),
-  INDEX `idx_icon_hash` (`icon_hash`)
+  UNIQUE `idx_user_id` (`user_id`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 -- ユーザごとのカスタムテーマ
@@ -128,6 +126,7 @@ CREATE TABLE `reactions` (
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 
+DROP TABLE IF EXISTS `favorite_emojis`;
 CREATE TABLE `favorite_emojis` (
   `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` BIGINT NOT NULL,
