@@ -15,7 +15,9 @@ CREATE TABLE `icons` (
   `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` BIGINT NOT NULL,
   `image` LONGBLOB NOT NULL,
-  INDEX `idx_user_id` (`user_id`)
+  `icon_hash` BINARY(32) NOT NULL,
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_icon_hash` (`icon_hash`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 -- ユーザごとのカスタムテーマ
@@ -56,7 +58,9 @@ CREATE TABLE `tags` (
 CREATE TABLE `livestream_tags` (
   `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `livestream_id` BIGINT NOT NULL,
-  `tag_id` BIGINT NOT NULL
+  `tag_id` BIGINT NOT NULL,
+  INDEX `idx_livestream_id` (`livestream_id`),
+  INDEX `idx_tag_id` (`tag_id`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 -- ライブ配信視聴履歴
