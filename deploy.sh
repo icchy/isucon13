@@ -1,6 +1,6 @@
 #!/bin/bash
 
-HOST=i1
+HOST=i3
 APPDIR=/home/isucon/webapp
 
 # isupipe
@@ -10,4 +10,4 @@ ssh $HOST make prebench
 
 
 # db
-rsync -av -e ssh webapp/sql $HOST:$APPDIR/sql
+rsync -av --delete -e ssh webapp/sql/ $HOST:$APPDIR/sql
