@@ -495,7 +495,7 @@ func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel Li
 	}
 
 	var livestreamTagIds []int64
-	if err := tx.SelectContext(ctx, &livestreamTagIds, "SELECT id FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+	if err := tx.SelectContext(ctx, &livestreamTagIds, "SELECT tag_id FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
 		return Livestream{}, err
 	}
 
