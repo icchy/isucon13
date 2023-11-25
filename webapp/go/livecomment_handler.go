@@ -203,13 +203,9 @@ func postLivecommentHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
 	}
 
-	var hitSpam int
 	for _, ngword := range ngwords {
 		if strings.Contains(req.Comment, ngword.Word) {
-			c.Logger().Infof("[hitSpam=%d] comment = %s", hitSpam, req.Comment)
-			if hitSpam >= 1 {
-				return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
-			}
+			return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
 		}
 	}
 
