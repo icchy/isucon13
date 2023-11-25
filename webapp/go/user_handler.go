@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
 	"time"
 
@@ -91,6 +90,9 @@ type PostIconResponse struct {
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 
+	iconHash := c.Request().Header.Get("If-None-Match")
+	c.Logger().Print(iconHash)
+
 	username := c.Param("username")
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
@@ -105,6 +107,23 @@ func getIconHandler(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
+	}
+
+	if iconHash != "" {
+		var currentIconHash []byte
+		var currentIconHashStr string
+		if err := tx.GetContext(ctx, &currentIconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", user.ID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				currentIconHashStr = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
+			}
+		} else {
+			currentIconHashStr = fmt.Sprintf("%x", currentIconHash)
+		}
+		if "\""+currentIconHashStr+"\"" == iconHash {
+			return c.NoContent(http.StatusNotModified)
+		}
 	}
 
 	var image []byte
@@ -147,7 +166,13 @@ func postIconHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old user icon: "+err.Error())
 	}
 
-	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image) VALUES (?, ?)", userID, req.Image)
+	// imageのsha256を計算
+	hash := sha256.New()
+	// hash doesn't returns error
+	_, _ = hash.Write(req.Image)
+	iconHash := hash.Sum(nil)
+
+	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?)", userID, req.Image, iconHash)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
 	}
@@ -407,18 +432,16 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 		return User{}, err
 	}
 
-	var image []byte
-	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", userModel.ID); err != nil {
+	var iconHash []byte
+	var iconHashStr string
+	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return User{}, err
 		}
-		image, err = os.ReadFile(fallbackImage)
-		if err != nil {
-			return User{}, err
-		}
+		iconHashStr = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
+	} else {
+		iconHashStr = fmt.Sprintf("%x", iconHash)
 	}
-	iconHash := sha256.Sum256(image)
-
 	user := User{
 		ID:          userModel.ID,
 		Name:        userModel.Name,
@@ -428,7 +451,7 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 			ID:       themeModel.ID,
 			DarkMode: themeModel.DarkMode,
 		},
-		IconHash: fmt.Sprintf("%x", iconHash),
+		IconHash: iconHashStr,
 	}
 
 	return user, nil
