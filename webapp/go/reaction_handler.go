@@ -33,6 +33,7 @@ type PostReactionRequest struct {
 	EmojiName string `json:"emoji_name"`
 }
 
+// Live Streamのリアクションを指定した件数取得する
 func getReactionsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 
