@@ -18,7 +18,7 @@ CREATE TABLE `icons` (
   `user_id` BIGINT NOT NULL,
   `image` LONGBLOB NOT NULL,
   `icon_hash` BINARY(32) NOT NULL,
-  INDEX `idx_user_id` (`user_id`),
+  UNIQUE `idx_user_id` (`user_id`),
   INDEX `idx_icon_hash` (`icon_hash`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
@@ -125,4 +125,11 @@ CREATE TABLE `reactions` (
   -- :innocent:, :tada:, etc...
   `emoji_name` VARCHAR(255) NOT NULL,
   `created_at` BIGINT NOT NULL
+) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+
+CREATE TABLE `favorite_emojis` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `user_id` BIGINT NOT NULL,
+  `emoji_name` VARCHAR(255) NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
