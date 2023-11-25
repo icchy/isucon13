@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -174,17 +175,16 @@ func getIconHandler(c echo.Context) error {
 		}
 	}
 
-	var image struct {
-		Image []byte `db:"image"`
+	if _, err := os.Stat(fmt.Sprintf("/home/isucon/icons/%x", user.IconHash)); err != nil {
+		return c.File(fallbackImage)
 	}
-	if err := dbConn.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.File(fallbackImage)
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
-		}
+
+	image, err := os.ReadFile(fmt.Sprintf("/home/isucon/icons/%x", user.IconHash))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}
-	return c.Blob(http.StatusOK, "image/jpeg", image.Image)
+
+	return c.Blob(http.StatusOK, "image/jpeg", image)
 }
 
 func postIconHandler(c echo.Context) error {
@@ -211,16 +211,15 @@ func postIconHandler(c echo.Context) error {
 	_, _ = hash.Write(req.Image)
 	iconHash := hash.Sum(nil)
 
+	if err := os.WriteFile(fmt.Sprintf("/home/isucon/icons/%x", iconHash), req.Image, 0644); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to save image: "+err.Error())
+	}
+
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start tx: %w", err)
 	}
 	defer tx.Rollback()
-
-	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image) VALUES (?, ?) as new_row ON DUPLICATE KEY UPDATE image = new_row.image", userID, req.Image)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
-	}
 
 	if _, err := tx.ExecContext(ctx, "UPDATE users SET icon_hash = ? WHERE id = ?", iconHash, userID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
@@ -230,13 +229,8 @@ func postIconHandler(c echo.Context) error {
 		return fmt.Errorf("tx error: %w", err)
 	}
 
-	iconID, err := rs.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted icon id: "+err.Error())
-	}
-
 	return c.JSON(http.StatusCreated, &PostIconResponse{
-		ID: iconID,
+		ID: userID,
 	})
 }
 
