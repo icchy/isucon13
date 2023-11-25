@@ -2003,3 +2003,5 @@ INSERT INTO themes (user_id, dark_mode) VALUES (1000, false);
 ALTER TABLE users ADD COLUMN dark_mode BOOLEAN NOT NULL DEFAULT true;
 UPDATE users SET dark_mode = (SELECT themes.dark_mode FROM themes WHERE themes.user_id = users.id);
 
+ALTER TABLE users ADD COLUMN icon_hash BINARY(32) NOT NULL DEFAULT X'd9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0';
+ALTER TABLE users ADD INDEX idx_icon_hash (icon_hash);

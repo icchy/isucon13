@@ -79,7 +79,7 @@ func getUserStatisticsHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	var user UserModel
-	if err := tx.GetContext(ctx, &user, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`.`reactions`,`tips`,`live_comments` FROM users WHERE name = ?", username); err != nil {
+	if err := tx.GetContext(ctx, &user, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`reactions`,`tips`,`live_comments` FROM users WHERE name = ?", username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusBadRequest, "not found user that has the given username")
 		} else {
