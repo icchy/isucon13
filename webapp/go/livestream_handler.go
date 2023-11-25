@@ -494,21 +494,33 @@ func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel Li
 		return Livestream{}, err
 	}
 
-	var livestreamTagModels []*LivestreamTagModel
-	if err := tx.SelectContext(ctx, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+	var livestreamTagIds []int
+	if err := tx.SelectContext(ctx, &livestreamTagIds, "SELECT id FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
 		return Livestream{}, err
 	}
 
-	tags := make([]Tag, len(livestreamTagModels))
-	for i := range livestreamTagModels {
-		tagModel := TagModel{}
-		if err := tx.GetContext(ctx, &tagModel, "SELECT * FROM tags WHERE id = ?", livestreamTagModels[i].TagID); err != nil {
-			return Livestream{}, err
-		}
+	tags := make([]Tag, len(livestreamTagIds))
 
-		tags[i] = Tag{
-			ID:   tagModel.ID,
-			Name: tagModel.Name,
+	query, params, err := sqlx.In("SELECT * FROM tags WHERE id IN (?)", livestreamTagIds)
+	if err != nil {
+		return Livestream{}, err
+	}
+
+	tagModels := make([]TagModel, len(livestreamTagIds))
+	if err := tx.SelectContext(ctx, &tagModels, query, params...); err != nil {
+		return Livestream{}, err
+	}
+
+	for i := range livestreamTagIds {
+		tagId := livestreamTagIds[i]
+
+		for ii := range tagModels {
+			if tagModels[ii].ID == int64(tagId) {
+				tags[i] = Tag{
+					ID:   tagModels[ii].ID,
+					Name: tagModels[ii].Name,
+				}
+			}
 		}
 	}
 
