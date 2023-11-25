@@ -12,7 +12,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime/pprof"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -40,6 +43,41 @@ func init() {
 	if secretKey, ok := os.LookupEnv("ISUCON13_SESSION_SECRETKEY"); ok {
 		secret = []byte(secretKey)
 	}
+}
+
+var cpuProfiler struct {
+	mtx sync.Mutex
+	f   *os.File
+}
+
+func StartProfile() {
+	cpuProfiler.mtx.Lock()
+	defer cpuProfiler.mtx.Unlock()
+	if cpuProfiler.f != nil {
+		if err := cpuProfiler.f.Close(); err != nil {
+			log.Printf("failed to close profile file: %v", err)
+		}
+	}
+	pprof.StopCPUProfile()
+	var err error
+	cpuProfiler.f, err = os.Create(fmt.Sprintf("/tmp/profile-%s.pprof", time.Now().Format("20060102-15:04:05")))
+	if err != nil {
+		log.Printf("failed to create profile file: %v", err)
+		return
+	}
+	pprof.StartCPUProfile(cpuProfiler.f)
+}
+
+func StopProfile() {
+	cpuProfiler.mtx.Lock()
+	defer cpuProfiler.mtx.Unlock()
+	pprof.StopCPUProfile()
+	if cpuProfiler.f != nil {
+		if err := cpuProfiler.f.Close(); err != nil {
+			log.Printf("failed to close profile file: %v", err)
+		}
+	}
+	cpuProfiler.f = nil
 }
 
 type InitializeResponse struct {
@@ -201,6 +239,13 @@ func initializeHandler(c echo.Context) error {
 	}
 
 	tx.Commit()
+
+	StartProfile()
+
+	go func() {
+		time.Sleep(70 * time.Second)
+		StopProfile()
+	}()
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{
