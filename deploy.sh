@@ -1,6 +1,6 @@
 #!/bin/bash
 
-HOST=i3
+HOST=i1
 APPDIR=/home/isucon/webapp
 
 # isupipe
