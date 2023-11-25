@@ -558,9 +558,50 @@ func getLivecommentReportsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomment reports: "+err.Error())
 	}
 
+	livecommentModels := make(map[int64]*LivecommentModel)
+	livecommentUsers := make(map[int64]*UserModel)
+	reportUsers := make(map[int64]*UserModel)
+	if len(reportModels) > 0 {
+		livecommentIds := make([]int64, len(reportModels))
+		reportUserId := make([]int64, len(reportModels))
+		for i, model := range reportModels {
+			livecommentIds[i] = model.LivecommentID
+			reportUserId[i] = model.UserID
+		}
+		reportUsers, err = getUsersWithCache(ctx, tx, reportUserId)
+		if err != nil {
+			return fmt.Errorf("failed to get livecomment users: %w", err)
+		}
+		query, params, err := sqlx.In("SELECT * FROM livecomments WHERE id IN (?)", livecommentIds)
+		if err != nil {
+			return fmt.Errorf("invalid query: %x", err)
+		}
+		var livecommentModelRows []*LivecommentModel
+		if err := tx.SelectContext(ctx, &livecommentModelRows, query, params...); err != nil {
+			return fmt.Errorf("failed to get livecomments")
+		}
+		livecommentUserIds := make([]int64, len(livecommentModels))
+		for i, livecommentModel := range livecommentModelRows {
+			livecommentModels[livecommentModel.ID] = livecommentModel
+			livecommentUserIds[i] = livecommentModel.UserID
+		}
+		livecommentUsers, err = getUsersWithCache(ctx, tx, livecommentUserIds)
+		if err != nil {
+			return fmt.Errorf("failed to get livecomment users: %w", err)
+		}
+	}
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
+	liveOwner, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
 	reports := make([]LivecommentReport, len(reportModels))
 	for i := range reportModels {
-		report, err := fillLivecommentReportResponse(ctx, tx, *reportModels[i])
+		comment := livecommentModels[reportModels[i].LivecommentID]
+		report, err := fillLivecommentReportResponse(ctx, reportModels[i], comment, &livestreamModel, tagsId, liveOwner, livecommentUsers[comment.UserID], reportUsers[reportModels[i].UserID])
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
 		}

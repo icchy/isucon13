@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
 	"github.com/hlts2/gocache"
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
@@ -91,6 +92,35 @@ type PostIconResponse struct {
 
 var iconCache = gocache.New(gocache.WithExpireAt(1500 * time.Millisecond))
 var userCache = gocache.New(gocache.WithExpireAt(60 * time.Minute))
+
+func getUsersWithCache(ctx context.Context, tx *sqlx.Tx, userId []int64) (map[int64]*UserModel, error) {
+	ret := make(map[int64]*UserModel)
+	userIds := make([]int64, 0)
+	for _, id := range userId {
+		if user := getUserOnlyCache(id); user != nil {
+			ret[id] = user
+		} else {
+			userIds = append(userIds, id)
+		}
+	}
+	if len(userIds) > 0 {
+		query, params, err := sqlx.In("SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE id IN (?)", userIds)
+		if err != nil {
+			return nil, fmt.Errorf("invalid query: %x", err)
+		}
+		var userModels []*UserModel
+		if err := tx.SelectContext(ctx, &userModels, query, params...); err != nil {
+			return nil, fmt.Errorf("failed to get tags id")
+		}
+		for _, userModel := range userModels {
+			ret[userModel.ID] = userModel
+			userCache.Set(fmt.Sprintf("id:%d", userModel.ID), &userModel)
+			userCache.Set(fmt.Sprintf("name:%s", userModel.Name), &userModel)
+			iconCache.Set(userModel.Name, userModel.IconHash)
+		}
+	}
+	return ret, nil
+}
 
 func getUserOnlyCache(userId int64) *UserModel {
 	if user, found := userCache.Get(fmt.Sprintf("id:%d", userId)); found {

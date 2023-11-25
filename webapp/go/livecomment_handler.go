@@ -85,6 +85,23 @@ func getLivecommentsHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
+	livestreamModel := LivestreamModel{}
+	err = tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
+	}
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	}
+	livestreamUser, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
+
 	query := "SELECT * FROM livecomments WHERE livestream_id = ? ORDER BY id DESC"
 	if c.QueryParam("limit") != "" {
 		limit, err := strconv.Atoi(c.QueryParam("limit"))
@@ -102,10 +119,18 @@ func getLivecommentsHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomments: "+err.Error())
 	}
+	userIds := make([]int64, len(livecommentModels))
+	for i, model := range livecommentModels {
+		userIds[i] = model.UserID
+	}
+	commentOwners, err := getUsersWithCache(ctx, tx, userIds)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
 
 	livecomments := make([]Livecomment, len(livecommentModels))
 	for i := range livecommentModels {
-		livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModels[i])
+		livecomment, err := fillLivecommentResponse(ctx, &livecommentModels[i], &livestreamModel, tagsId, livestreamUser, commentOwners[livecommentModels[i].UserID])
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
 		}
@@ -245,8 +270,20 @@ func postLivecommentHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment id: "+err.Error())
 	}
 	livecommentModel.ID = livecommentID
+	livestreamUser, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
+	commentOwner, err := getUserWithCache(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
 
-	livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModel)
+	livecomment, err := fillLivecommentResponse(ctx, &livecommentModel, &livestreamModel, tagsId, livestreamUser, commentOwner)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment: "+err.Error())
 	}
@@ -304,6 +341,10 @@ func reportLivecommentHandler(c echo.Context) error {
 		}
 	}
 
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
 	now := time.Now().Unix()
 	reportModel := LivecommentReportModel{
 		UserID:        int64(userID),
@@ -321,7 +362,19 @@ func reportLivecommentHandler(c echo.Context) error {
 	}
 	reportModel.ID = reportID
 
-	report, err := fillLivecommentReportResponse(ctx, tx, reportModel)
+	livestreamUser, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
+	commentOwner, err := getUserWithCache(ctx, livecommentModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
+	reportOwner, err := getUserWithCache(ctx, reportModel.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to get user id: %w", err)
+	}
+	report, err := fillLivecommentReportResponse(ctx, &reportModel, &livecommentModel, &livestreamModel, tagsId, livestreamUser, commentOwner, reportOwner)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
 	}
@@ -419,28 +472,12 @@ func moderateHandler(c echo.Context) error {
 	})
 }
 
-func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel) (Livecomment, error) {
-	commentOwnerModel := UserModel{}
-	if err := tx.GetContext(ctx, &commentOwnerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", livecommentModel.UserID); err != nil {
-		return Livecomment{}, err
-	}
-	commentOwner, err := fillUserResponse(ctx, &commentOwnerModel)
+func fillLivecommentResponse(ctx context.Context, livecommentModel *LivecommentModel, livestreamModel *LivestreamModel, tagIds []int64, liveOwnerModel *UserModel, commentOwnerModel *UserModel) (Livecomment, error) {
+	commentOwner, err := fillUserResponse(ctx, commentOwnerModel)
 	if err != nil {
 		return Livecomment{}, err
 	}
-	livestreamModel := &LivestreamModel{}
-	if err := tx.GetContext(ctx, livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livecommentModel.LivestreamID); err != nil {
-		return Livecomment{}, err
-	}
-	var tagIds []int64
-	if err := tx.SelectContext(ctx, &tagIds, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
-		return Livecomment{}, fmt.Errorf("failed to get tags id")
-	}
-	liveOwnerModel := UserModel{}
-	if err := tx.GetContext(ctx, &liveOwnerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
-		return Livecomment{}, err
-	}
-	livestream, err := fillLivestreamResponse(ctx, livestreamModel, &liveOwnerModel, tagIds)
+	livestream, err := fillLivestreamResponse(ctx, livestreamModel, liveOwnerModel, tagIds)
 	if err != nil {
 		return Livecomment{}, err
 	}
@@ -457,21 +494,13 @@ func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel 
 	return livecomment, nil
 }
 
-func fillLivecommentReportResponse(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel) (LivecommentReport, error) {
-	reporterModel := UserModel{}
-	if err := tx.GetContext(ctx, &reporterModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", reportModel.UserID); err != nil {
-		return LivecommentReport{}, err
-	}
-	reporter, err := fillUserResponse(ctx, &reporterModel)
+func fillLivecommentReportResponse(ctx context.Context, reportModel *LivecommentReportModel, livecommentModel *LivecommentModel, livestreamModel *LivestreamModel, tagIds []int64, liveOwnerModel *UserModel, commentOwnerModel *UserModel, reporterModel *UserModel) (LivecommentReport, error) {
+	reporter, err := fillUserResponse(ctx, reporterModel)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
 
-	livecommentModel := LivecommentModel{}
-	if err := tx.GetContext(ctx, &livecommentModel, "SELECT * FROM livecomments WHERE id = ?", reportModel.LivecommentID); err != nil {
-		return LivecommentReport{}, err
-	}
-	livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModel)
+	livecomment, err := fillLivecommentResponse(ctx, livecommentModel, livestreamModel, tagIds, liveOwnerModel, commentOwnerModel)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
