@@ -134,7 +134,7 @@ func getUserStatisticsHandler(c echo.Context) error {
 	// お気に入り絵文字
 	var favoriteEmoji string
 
-	if err := tx.SelectContext(ctx, &favoriteEmoji, "SELECT emoji_name FROM users WHERE name = ? GROUP BY emoji_name ORDER BY COUNT(*) DESC, emoji_name DESC LIMIT 1", user.Name); err != nil {
+	if err := tx.GetContext(ctx, &favoriteEmoji, "SELECT emoji_name FROM favorite_emojis WHERE user_id = ? GROUP BY emoji_name ORDER BY COUNT(*) DESC, emoji_name DESC LIMIT 1", user.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to find favorite emoji: "+err.Error())
 	}
 

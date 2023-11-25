@@ -4,6 +4,8 @@ package main
 // sqlx的な参考: https://jmoiron.github.io/sqlx/
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -111,6 +113,56 @@ func initializeHandler(c echo.Context) error {
 		c.Logger().Warnf("init.sh failed with err=%s", string(out))
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to initialize: "+err.Error())
 	}
+
+	// update reactions, tips, live_comments
+	ctx := c.Request().Context()
+	tx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+	}
+	var users []*UserModel
+	if err := tx.SelectContext(ctx, &users, "SELECT * FROM users"); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get users: "+err.Error())
+	}
+
+	for _, user := range users {
+		var reactions int64
+		query := `
+		SELECT COUNT(*) FROM users u
+		INNER JOIN livestreams l ON l.user_id = u.id
+		INNER JOIN reactions r ON r.livestream_id = l.id
+		WHERE u.id = ?`
+		if err := tx.GetContext(ctx, &reactions, query, user.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to count reactions: "+err.Error())
+		}
+
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET reactions = ? WHERE id = ?", reactions, user.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update reactions: "+err.Error())
+		}
+
+		var tips int64
+		query = `
+		SELECT IFNULL(SUM(l2.tip), 0) FROM users u
+		INNER JOIN livestreams l ON l.user_id = u.id	
+		INNER JOIN livecomments l2 ON l2.livestream_id = l.id
+		WHERE u.id = ?`
+		if err := tx.GetContext(ctx, &tips, query, user.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to count tips: "+err.Error())
+		}
+
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET tips = ? WHERE id = ?", tips, user.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update tips: "+err.Error())
+		}
+
+		var live_comments int64
+		if err := tx.GetContext(ctx, &live_comments, "SELECT COUNT(*) FROM users u INNER JOIN livestreams l ON l.user_id = u.id INNER JOIN livecomments c ON c.livestream_id = l.id WHERE u.id = ?", user.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get live_comments: "+err.Error())
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET live_comments = ? WHERE id = ?", live_comments, user.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update live_comments: "+err.Error())
+		}
+	}
+	tx.Commit()
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{
