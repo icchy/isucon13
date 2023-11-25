@@ -36,6 +36,9 @@ type UserModel struct {
 	DisplayName    string `db:"display_name"`
 	Description    string `db:"description"`
 	HashedPassword string `db:"password"`
+	Reactions      int64  `db:"reactions"`
+	Tips           int64  `db:"tips"`
+	LiveComments   int64  `db:"live_comments"`
 }
 
 type User struct {
