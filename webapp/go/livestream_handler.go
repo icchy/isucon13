@@ -574,13 +574,13 @@ func getLivecommentReportsHandler(c echo.Context) error {
 		}
 		query, params, err := sqlx.In("SELECT * FROM livecomments WHERE id IN (?)", livecommentIds)
 		if err != nil {
-			return fmt.Errorf("invalid query: %x", err)
+			return fmt.Errorf("invalid query: %w", err)
 		}
 		var livecommentModelRows []*LivecommentModel
 		if err := tx.SelectContext(ctx, &livecommentModelRows, query, params...); err != nil {
 			return fmt.Errorf("failed to get livecomments")
 		}
-		livecommentUserIds := make([]int64, len(livecommentModels))
+		livecommentUserIds := make([]int64, len(livecommentModelRows))
 		for i, livecommentModel := range livecommentModelRows {
 			livecommentModels[livecommentModel.ID] = livecommentModel
 			livecommentUserIds[i] = livecommentModel.UserID
@@ -601,6 +601,9 @@ func getLivecommentReportsHandler(c echo.Context) error {
 	reports := make([]LivecommentReport, len(reportModels))
 	for i := range reportModels {
 		comment := livecommentModels[reportModels[i].LivecommentID]
+		if comment == nil {
+			return fmt.Errorf("comment not found")
+		}
 		report, err := fillLivecommentReportResponse(ctx, reportModels[i], comment, &livestreamModel, tagsId, liveOwner, livecommentUsers[comment.UserID], reportUsers[reportModels[i].UserID])
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())

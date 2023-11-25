@@ -114,8 +114,8 @@ func getUsersWithCache(ctx context.Context, tx *sqlx.Tx, userId []int64) (map[in
 		}
 		for _, userModel := range userModels {
 			ret[userModel.ID] = userModel
-			userCache.Set(fmt.Sprintf("id:%d", userModel.ID), &userModel)
-			userCache.Set(fmt.Sprintf("name:%s", userModel.Name), &userModel)
+			userCache.Set(fmt.Sprintf("id:%d", userModel.ID), userModel)
+			userCache.Set(fmt.Sprintf("name:%s", userModel.Name), userModel)
 			iconCache.Set(userModel.Name, userModel.IconHash)
 		}
 	}
