@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,9 +36,11 @@ type UserModel struct {
 	DisplayName    string `db:"display_name"`
 	Description    string `db:"description"`
 	HashedPassword string `db:"password"`
+	DarkMode       bool   `db:"dark_mode"`
 	Reactions      int64  `db:"reactions"`
 	Tips           int64  `db:"tips"`
 	LiveComments   int64  `db:"live_comments"`
+	IconHash       []byte `db:"icon_hash"`
 }
 
 type User struct {
@@ -97,50 +100,37 @@ func getIconHandler(c echo.Context) error {
 
 	username := c.Param("username")
 
-	var user UserModel
-	if err := dbConn.GetContext(ctx, &user, "SELECT * FROM users WHERE name = ?", username); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
-		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
-	}
-
 	if iconHash != "" {
 		cacheIconCacheHashStr, found := iconCache.Get(username)
 		if found && iconHash == "\""+cacheIconCacheHashStr.(string)+"\"" {
 			return c.NoContent(http.StatusNotModified)
 		}
-
-		var currentIconHash []byte
-		var currentIconHashStr string
-		if err := dbConn.GetContext(ctx, &currentIconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", user.ID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				currentIconHashStr = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
-			}
-		} else {
-			currentIconHashStr = fmt.Sprintf("%x", currentIconHash)
+	}
+	var user UserModel
+	if err := dbConn.GetContext(ctx, &user, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE name = ?", username); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
-		if "\""+currentIconHashStr+"\"" == iconHash {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
+	}
+	c.Set(username, user.IconHash)
+
+	if iconHash != "" {
+		if fmt.Sprintf("\"%x\"", user.IconHash) == iconHash {
 			return c.NoContent(http.StatusNotModified)
 		}
 	}
 
 	var image struct {
-		Image    []byte `db:"image"`
-		IconHash []byte `db:"icon_hash"`
+		Image []byte `db:"image"`
 	}
-	if err := dbConn.GetContext(ctx, &image, "SELECT image, icon_hash FROM icons WHERE user_id = ?", user.ID); err != nil {
+	if err := dbConn.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.Set(username, "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0")
 			return c.File(fallbackImage)
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 		}
 	}
-	iconCache.Set(username, fmt.Sprintf("%x", image.IconHash))
-
 	return c.Blob(http.StatusOK, "image/jpeg", image.Image)
 }
 
@@ -168,9 +158,23 @@ func postIconHandler(c echo.Context) error {
 	_, _ = hash.Write(req.Image)
 	iconHash := hash.Sum(nil)
 
-	rs, err := dbConn.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?) as new_row ON DUPLICATE KEY UPDATE image = new_row.image, icon_hash = new_row.icon_hash", userID, req.Image, iconHash)
+	tx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image) VALUES (?, ?) as new_row ON DUPLICATE KEY UPDATE image = new_row.image", userID, req.Image)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET icon_hash = ? WHERE id = ?", iconHash, userID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("tx error: %w", err)
 	}
 
 	iconID, err := rs.LastInsertId()
@@ -197,7 +201,7 @@ func getMeHandler(c echo.Context) error {
 	userID := sess.Values[defaultUserIDKey].(int64)
 
 	userModel := UserModel{}
-	err := dbConn.GetContext(ctx, &userModel, "SELECT * FROM users WHERE id = ?", userID)
+	err := dbConn.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE id = ?", userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found user that has the userid in session")
 	}
@@ -205,7 +209,7 @@ func getMeHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
 
-	user, err := fillUserResponse(ctx, dbConn, userModel)
+	user, err := fillUserResponse(ctx, userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
@@ -244,9 +248,11 @@ func registerHandler(c echo.Context) error {
 		DisplayName:    req.DisplayName,
 		Description:    req.Description,
 		HashedPassword: string(hashedPassword),
+		DarkMode:       req.Theme.DarkMode,
+		IconHash:       []byte{217, 248, 41, 78, 157, 137, 95, 129, 206, 98, 231, 61, 199, 213, 223, 248, 98, 164, 250, 64, 189, 78, 15, 236, 245, 63, 117, 38, 168, 237, 202, 192},
 	}
 
-	result, err := tx.NamedExecContext(ctx, "INSERT INTO users (name, display_name, description, password) VALUES(:name, :display_name, :description, :password)", userModel)
+	result, err := tx.NamedExecContext(ctx, "INSERT INTO users (name, display_name, description, password, dark_mode) VALUES(:name, :display_name, :description, :password, :dark_mode)", userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert user: "+err.Error())
 	}
@@ -267,9 +273,11 @@ func registerHandler(c echo.Context) error {
 	}
 
 	// send to http request to isudns
-
 	type RecordCreateParam struct {
 		Username string `json:"username"`
+	}
+	if out, err := exec.Command("pdnsutil", "add-record", "u.isucon.dev", req.Name, "A", "0", powerDNSSubdomainAddress).CombinedOutput(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
 	}
 	param := RecordCreateParam{
 		Username: req.Name,
@@ -293,7 +301,7 @@ func registerHandler(c echo.Context) error {
 	}
 	defer resp.Body.Close()
 
-	user, err := fillUserResponse(ctx, tx, userModel)
+	user, err := fillUserResponse(ctx, userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
@@ -324,7 +332,7 @@ func loginHandler(c echo.Context) error {
 
 	userModel := UserModel{}
 	// usernameはUNIQUEなので、whereで一意に特定できる
-	err = tx.GetContext(ctx, &userModel, "SELECT * FROM users WHERE name = ?", req.Username)
+	err = tx.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode` FROM users WHERE name = ?", req.Username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid username or password")
 	}
@@ -388,14 +396,14 @@ func getUserHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	userModel := UserModel{}
-	if err := tx.GetContext(ctx, &userModel, "SELECT * FROM users WHERE name = ?", username); err != nil {
+	if err := tx.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE name = ?", username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
 
-	user, err := fillUserResponse(ctx, tx, userModel)
+	user, err := fillUserResponse(ctx, userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
@@ -431,36 +439,17 @@ func verifyUserSession(c echo.Context) error {
 	return nil
 }
 
-type Querier interface {
-	GetContext(ctx context.Context, out interface{}, query string, args ...interface{}) error
-}
-
-func fillUserResponse(ctx context.Context, tx Querier, userModel UserModel) (User, error) {
-	themeModel := ThemeModel{}
-	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
-		return User{}, err
-	}
-
-	var iconHash []byte
-	var iconHashStr string
-	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return User{}, err
-		}
-		iconHashStr = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
-	} else {
-		iconHashStr = fmt.Sprintf("%x", iconHash)
-	}
+func fillUserResponse(ctx context.Context, userModel UserModel) (User, error) {
 	user := User{
 		ID:          userModel.ID,
 		Name:        userModel.Name,
 		DisplayName: userModel.DisplayName,
 		Description: userModel.Description,
 		Theme: Theme{
-			ID:       themeModel.ID,
-			DarkMode: themeModel.DarkMode,
+			ID:       userModel.ID,
+			DarkMode: userModel.DarkMode,
 		},
-		IconHash: iconHashStr,
+		IconHash: fmt.Sprintf("%x", userModel.IconHash),
 	}
 
 	return user, nil
