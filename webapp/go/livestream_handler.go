@@ -476,10 +476,10 @@ func getLivecommentReportsHandler(c echo.Context) error {
 
 func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel LivestreamModel) (Livestream, error) {
 	ownerModel := UserModel{}
-	if err := tx.GetContext(ctx, &ownerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode` FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
+	if err := tx.GetContext(ctx, &ownerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
 		return Livestream{}, err
 	}
-	owner, err := fillUserResponse(ctx, tx, ownerModel)
+	owner, err := fillUserResponse(ctx, ownerModel)
 	if err != nil {
 		return Livestream{}, err
 	}
