@@ -1,3 +1,3 @@
-ALTER TABLE users ADD reactions INT;
-ALTER TABLE users ADD tips INT;
-ALTER TABLE users ADD live_comments INT;
+ALTER TABLE users ADD reactions BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD tips BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD live_comments BIGINT NOT NULL DEFAULT 0;
