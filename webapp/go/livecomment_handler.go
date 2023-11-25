@@ -223,6 +223,15 @@ func postLivecommentHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
 	}
 
+	var liveStreamUserId int64
+	if err := tx.GetContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID: "+err.Error())
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET tips = tips + ? WHERE id = ?", req.Tip, liveStreamUserId); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update tips for user: "+err.Error())
+	}
+
 	livecommentID, err := rs.LastInsertId()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment id: "+err.Error())

@@ -125,16 +125,16 @@ func postReactionHandler(c echo.Context) error {
 	}
 
 	var liveStreamUserId int64
-	if err := tx.SelectContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID")
+	if err := tx.GetContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID: "+err.Error())
 	}
 
 	if _, err := tx.ExecContext(ctx, "UPDATE users SET reactions = reactions + 1 WHERE id = ?", liveStreamUserId); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update reactions")
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update reactions: "+err.Error())
 	}
 
 	if _, err := tx.ExecContext(ctx, "INSERT INTO favorite_emojis (user_id, emoji_name) VALUES (?, ?)", liveStreamUserId, req.EmojiName); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to add favorite_emojis")
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to add favorite_emojis: "+err.Error())
 	}
 
 	reactionID, err := result.LastInsertId()
