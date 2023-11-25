@@ -200,10 +200,12 @@ func loadZoneFile(zoneFilePath string) error {
 		}
 		if strings.Contains(line, "0 IN A") {
 			s := strings.Split(line, " ")
-			if len(s) != 5 {
-				return fmt.Errorf("invalid zone file format")
-			}
-			records.Store(s[0], powerDNSSubdomainAddress)
+			//if len(s) != 5 {
+			//	fmt.Println(len(s))
+			//	return fmt.Errorf("invalid zone file format (line: %s)", line)
+			//}
+			fmt.Println()
+			records.Store(fmt.Sprintf("%s.u.isucon.dev.", s[0]), powerDNSSubdomainAddress)
 		}
 	}
 
@@ -239,7 +241,7 @@ func main() {
 	eg := errgroup.Group{}
 
 	eg.Go(func() error {
-		port := 5353
+		port := 53
 		server := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
 		log.Printf("Starting at %d\n", port)
 		err = server.ListenAndServe()

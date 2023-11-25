@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"time"
 
 	"github.com/google/uuid"
@@ -272,12 +271,13 @@ func registerHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert user theme: "+err.Error())
 	}
 
+	//if out, err := exec.Command("pdnsutil", "add-record", "u.isucon.dev", req.Name, "A", "0", powerDNSSubdomainAddress).CombinedOutput(); err != nil {
+	//	return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
+	//}
+
 	// send to http request to isudns
 	type RecordCreateParam struct {
 		Username string `json:"username"`
-	}
-	if out, err := exec.Command("pdnsutil", "add-record", "u.isucon.dev", req.Name, "A", "0", powerDNSSubdomainAddress).CombinedOutput(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
 	}
 	param := RecordCreateParam{
 		Username: req.Name,
@@ -287,7 +287,7 @@ func registerHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to marshal json: "+err.Error())
 	}
 
-	client := http.Client{}
+	client := &http.Client{}
 	reqIsuDNS, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s:8082/api/record", isuDNSServerAddress), bytes.NewBuffer(b))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create request: "+err.Error())
@@ -296,10 +296,10 @@ func registerHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to send request: "+err.Error())
 	}
-	if resp.StatusCode != http.StatusOK {
-		return echo.NewHTTPError(http.StatusInternalServerError, "invalid response from isudns: "+err.Error())
-	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return echo.NewHTTPError(http.StatusInternalServerError, "invalid response from isudns: %s", resp.Body)
+	}
 
 	user, err := fillUserResponse(ctx, userModel)
 	if err != nil {
