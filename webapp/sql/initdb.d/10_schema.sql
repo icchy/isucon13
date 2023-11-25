@@ -18,7 +18,7 @@ CREATE TABLE `icons` (
   `user_id` BIGINT NOT NULL,
   `image` LONGBLOB NOT NULL,
   `icon_hash` BINARY(32) NOT NULL,
-  INDEX `idx_user_id` (`user_id`),
+  UNIQUE `idx_user_id` (`user_id`),
   INDEX `idx_icon_hash` (`icon_hash`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
