@@ -21,7 +21,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
@@ -143,7 +142,8 @@ func connectDB(logger echo.Logger) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(60)
+	db.SetMaxOpenConns(400)
+	db.SetMaxIdleConns(400)
 
 	if err := db.Ping(); err != nil {
 		return nil, err
@@ -279,7 +279,7 @@ func main() {
 	e.Debug = false
 	e.Logger.SetLevel(echolog.ERROR)
 	e.JSONSerializer = &JSONSerializer{}
-	e.Use(middleware.Logger())
+	// e.Use(middleware.Logger())
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.dev"
 	e.Use(session.Middleware(cookieStore))

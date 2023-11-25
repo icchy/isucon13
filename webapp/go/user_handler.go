@@ -91,7 +91,7 @@ type PostIconResponse struct {
 	ID int64 `json:"id"`
 }
 
-var iconCache = gocache.New(gocache.WithExpireAt(1500 * time.Millisecond))
+var iconCache = gocache.New(gocache.WithExpireAt(60 * time.Minute))
 var userCache = gocache.New(gocache.WithExpireAt(60 * time.Minute))
 
 func getUsersWithCache(ctx context.Context, tx *sqlx.Tx, userId []int64) (map[int64]*UserModel, error) {
@@ -257,6 +257,10 @@ func postIconHandler(c echo.Context) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("tx error: %w", err)
+	}
+	user, err := getUserWithCache(ctx, userID)
+	if err == nil {
+		iconCache.Delete(user.Name)
 	}
 
 	return c.JSON(http.StatusCreated, &PostIconResponse{

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -66,10 +65,31 @@ func getReactionsHandler(c echo.Context) error {
 	if err := tx.SelectContext(ctx, &reactionModels, query, livestreamID); err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, "failed to get reactions")
 	}
+	userIds := make([]int64, len(reactionModels))
+	for i, model := range reactionModels {
+		userIds[i] = model.UserID
+	}
+	reactionUsers, err := getUsersWithCache(ctx, tx, userIds)
+	if err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
+	livestreamModel := LivestreamModel{}
+	err = tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	}
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
+	livestreamUser, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
 
 	reactions := make([]Reaction, len(reactionModels))
 	for i := range reactionModels {
-		reaction, err := fillReactionResponse(ctx, tx, reactionModels[i])
+		reaction, err := fillReactionResponse(ctx, reactionModels[i], reactionUsers[reactionModels[i].UserID], &livestreamModel, tagsId, livestreamUser)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
 		}
@@ -119,6 +139,11 @@ func postReactionHandler(c echo.Context) error {
 		CreatedAt:    time.Now().Unix(),
 	}
 
+	livestreamModel := LivestreamModel{}
+	err = tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	}
 	result, err := tx.NamedExecContext(ctx, "INSERT INTO reactions (user_id, livestream_id, emoji_name, created_at) VALUES (:user_id, :livestream_id, :emoji_name, :created_at)", reactionModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert reaction: "+err.Error())
@@ -128,16 +153,11 @@ func postReactionHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update livestream reaction counter: "+err.Error())
 	}
 
-	var liveStreamUserId int64
-	if err := tx.GetContext(ctx, &liveStreamUserId, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream owner ID: "+err.Error())
-	}
-
-	if _, err := tx.ExecContext(ctx, "UPDATE users SET reactions = reactions + 1 WHERE id = ?", liveStreamUserId); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET reactions = reactions + 1 WHERE id = ?", livestreamModel.UserID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update reactions: "+err.Error())
 	}
 
-	if _, err := tx.ExecContext(ctx, "INSERT INTO favorite_emojis (user_id, emoji_name) VALUES (?, ?)", liveStreamUserId, req.EmojiName); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO favorite_emojis (user_id, emoji_name) VALUES (?, ?)", livestreamModel.UserID, req.EmojiName); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to add favorite_emojis: "+err.Error())
 	}
 
@@ -147,7 +167,19 @@ func postReactionHandler(c echo.Context) error {
 	}
 	reactionModel.ID = reactionID
 
-	reaction, err := fillReactionResponse(ctx, tx, reactionModel)
+	reactionUser, err := getUserWithCache(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
+	var tagsId []int64
+	if err := tx.SelectContext(ctx, &tagsId, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return fmt.Errorf("failed to get tags id: %w", err)
+	}
+	livestreamUser, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
+	reaction, err := fillReactionResponse(ctx, reactionModel, reactionUser, &livestreamModel, tagsId, livestreamUser)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
 	}
@@ -159,29 +191,12 @@ func postReactionHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, reaction)
 }
 
-func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
-	userModel, err := getUserWithCache(ctx, reactionModel.UserID)
-	if err != nil {
-		return Reaction{}, fmt.Errorf("failed to get live owner: %w", err)
-	}
-	user, err := fillUserResponse(ctx, userModel)
+func fillReactionResponse(ctx context.Context, reactionModel ReactionModel, reactionUserModel *UserModel, livestreamModel *LivestreamModel, tagIds []int64, liveOwnerModel *UserModel) (Reaction, error) {
+	user, err := fillUserResponse(ctx, reactionUserModel)
 	if err != nil {
 		return Reaction{}, err
 	}
-
-	livestreamModel := LivestreamModel{}
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", reactionModel.LivestreamID); err != nil {
-		return Reaction{}, err
-	}
-	var tagIds []int64
-	if err := tx.SelectContext(ctx, &tagIds, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
-		return Reaction{}, fmt.Errorf("failed to get tags id")
-	}
-	liveOwnerModel, err := getUserWithCache(ctx, livestreamModel.UserID)
-	if err != nil {
-		return Reaction{}, fmt.Errorf("failed to get live owner: %w", err)
-	}
-	livestream, err := fillLivestreamResponse(ctx, &livestreamModel, liveOwnerModel, tagIds)
+	livestream, err := fillLivestreamResponse(ctx, livestreamModel, liveOwnerModel, tagIds)
 	if err != nil {
 		return Reaction{}, err
 	}
