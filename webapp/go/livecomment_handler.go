@@ -416,16 +416,23 @@ func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel 
 	if err := tx.GetContext(ctx, &commentOwnerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", livecommentModel.UserID); err != nil {
 		return Livecomment{}, err
 	}
-	commentOwner, err := fillUserResponse(ctx, commentOwnerModel)
+	commentOwner, err := fillUserResponse(ctx, &commentOwnerModel)
 	if err != nil {
 		return Livecomment{}, err
 	}
-
-	livestreamModel := LivestreamModel{}
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livecommentModel.LivestreamID); err != nil {
+	livestreamModel := &LivestreamModel{}
+	if err := tx.GetContext(ctx, livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livecommentModel.LivestreamID); err != nil {
 		return Livecomment{}, err
 	}
-	livestream, err := fillLivestreamResponse(ctx, tx, livestreamModel)
+	var tagIds []int64
+	if err := tx.SelectContext(ctx, &tagIds, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return Livecomment{}, fmt.Errorf("failed to get tags id")
+	}
+	liveOwnerModel := UserModel{}
+	if err := tx.GetContext(ctx, &liveOwnerModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
+		return Livecomment{}, err
+	}
+	livestream, err := fillLivestreamResponse(ctx, livestreamModel, &liveOwnerModel, tagIds)
 	if err != nil {
 		return Livecomment{}, err
 	}
@@ -447,7 +454,7 @@ func fillLivecommentReportResponse(ctx context.Context, tx *sqlx.Tx, reportModel
 	if err := tx.GetContext(ctx, &reporterModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", reportModel.UserID); err != nil {
 		return LivecommentReport{}, err
 	}
-	reporter, err := fillUserResponse(ctx, reporterModel)
+	reporter, err := fillUserResponse(ctx, &reporterModel)
 	if err != nil {
 		return LivecommentReport{}, err
 	}

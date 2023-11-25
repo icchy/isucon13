@@ -90,6 +90,61 @@ type PostIconResponse struct {
 }
 
 var iconCache = gocache.New(gocache.WithExpireAt(1500 * time.Millisecond))
+var userCache = gocache.New(gocache.WithExpireAt(60 * time.Minute))
+
+func getUserOnlyCache(userId int64) *UserModel {
+	if user, found := userCache.Get(fmt.Sprintf("id:%d", userId)); found {
+		u := user.(*UserModel)
+		iconHash, valid := iconCache.Get(u.Name)
+		if valid {
+			u.IconHash = iconHash.([]byte)
+			return u
+		}
+	}
+	return nil
+}
+
+func getUserWithCache(ctx context.Context, userId int64) (*UserModel, error) {
+	if user, found := userCache.Get(fmt.Sprintf("id:%d", userId)); found {
+		u := user.(*UserModel)
+		iconHash, valid := iconCache.Get(u.Name)
+		if valid {
+			u.IconHash = iconHash.([]byte)
+			return u, nil
+		}
+	}
+
+	var userModel UserModel
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE id = ?", userId); err != nil {
+		return nil, err
+	}
+
+	userCache.Set(fmt.Sprintf("id:%d", userId), &userModel)
+	userCache.Set(fmt.Sprintf("name:%s", userModel.Name), &userModel)
+	iconCache.Set(userModel.Name, userModel.IconHash)
+	return &userModel, nil
+}
+
+func getUserByName(ctx context.Context, userName string) (*UserModel, error) {
+	if user, found := userCache.Get(fmt.Sprintf("name:%s", userName)); found {
+		u := user.(*UserModel)
+		iconHash, valid := iconCache.Get(u.Name)
+		if valid {
+			u.IconHash = iconHash.([]byte)
+			return u, nil
+		}
+	}
+
+	var userModel UserModel
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE name = ?", userName); err != nil {
+		return nil, err
+	}
+
+	userCache.Set(fmt.Sprintf("id:%d", userModel.ID), &userModel)
+	userCache.Set(fmt.Sprintf("name:%s", userModel.Name), &userModel)
+	iconCache.Set(userModel.Name, userModel.IconHash)
+	return &userModel, nil
+}
 
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
@@ -100,19 +155,18 @@ func getIconHandler(c echo.Context) error {
 	username := c.Param("username")
 
 	if iconHash != "" {
-		cacheIconCacheHashStr, found := iconCache.Get(username)
-		if found && iconHash == "\""+cacheIconCacheHashStr.(string)+"\"" {
+		cacheIconCacheHash, found := iconCache.Get(username)
+		if found && iconHash == fmt.Sprintf("\"%x\"", cacheIconCacheHash.([]byte)) {
 			return c.NoContent(http.StatusNotModified)
 		}
 	}
-	var user UserModel
-	if err := dbConn.GetContext(ctx, &user, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE name = ?", username); err != nil {
+	user, err := getUserByName(ctx, username)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
-	c.Set(username, user.IconHash)
 
 	if iconHash != "" {
 		if fmt.Sprintf("\"%x\"", user.IconHash) == iconHash {
@@ -199,8 +253,7 @@ func getMeHandler(c echo.Context) error {
 	// existence already checked
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	userModel := UserModel{}
-	err := dbConn.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE id = ?", userID)
+	userModel, err := getUserWithCache(ctx, userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found user that has the userid in session")
 	}
@@ -267,7 +320,7 @@ func registerHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
 	}
 
-	user, err := fillUserResponse(ctx, userModel)
+	user, err := fillUserResponse(ctx, &userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
@@ -296,9 +349,8 @@ func loginHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	userModel := UserModel{}
 	// usernameはUNIQUEなので、whereで一意に特定できる
-	err = tx.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode` FROM users WHERE name = ?", req.Username)
+	userModel, err := getUserByName(ctx, req.Username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid username or password")
 	}
@@ -361,8 +413,8 @@ func getUserHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	userModel := UserModel{}
-	if err := tx.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`,`icon_hash` FROM users WHERE name = ?", username); err != nil {
+	userModel, err := getUserByName(ctx, username)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
@@ -405,7 +457,7 @@ func verifyUserSession(c echo.Context) error {
 	return nil
 }
 
-func fillUserResponse(ctx context.Context, userModel UserModel) (User, error) {
+func fillUserResponse(ctx context.Context, userModel *UserModel) (User, error) {
 	user := User{
 		ID:          userModel.ID,
 		Name:        userModel.Name,
