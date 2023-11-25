@@ -156,9 +156,9 @@ func postReactionHandler(c echo.Context) error {
 }
 
 func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
-	userModel := UserModel{}
-	if err := tx.GetContext(ctx, &userModel, "SELECT `id`,`name`,`display_name`,`description`,`password`,`dark_mode`, `icon_hash` FROM users WHERE id = ?", reactionModel.UserID); err != nil {
-		return Reaction{}, err
+	userModel, err := getUserWithCache(ctx, reactionModel.UserID)
+	if err != nil {
+		return Reaction{}, fmt.Errorf("failed to get live owner: %w", err)
 	}
 	user, err := fillUserResponse(ctx, userModel)
 	if err != nil {
@@ -169,7 +169,15 @@ func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel Reacti
 	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", reactionModel.LivestreamID); err != nil {
 		return Reaction{}, err
 	}
-	livestream, err := fillLivestreamResponse(ctx, tx, livestreamModel)
+	var tagIds []int64
+	if err := tx.SelectContext(ctx, &tagIds, "SELECT `tag_id` FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
+		return Reaction{}, fmt.Errorf("failed to get tags id")
+	}
+	liveOwnerModel, err := getUserWithCache(ctx, livestreamModel.UserID)
+	if err != nil {
+		return Reaction{}, fmt.Errorf("failed to get live owner: %w", err)
+	}
+	livestream, err := fillLivestreamResponse(ctx, &livestreamModel, liveOwnerModel, tagIds)
 	if err != nil {
 		return Reaction{}, err
 	}

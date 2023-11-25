@@ -55,8 +55,7 @@ func getStreamerThemeHandler(c echo.Context) error {
 
 	username := c.Param("username")
 
-	userModel := UserModel{}
-	err := dbConn.GetContext(ctx, &userModel, "SELECT id, dark_mode FROM users WHERE name = ?", username)
+	userModel, err := getUserByName(ctx, username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 	}
