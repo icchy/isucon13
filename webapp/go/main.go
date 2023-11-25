@@ -25,12 +25,16 @@ import (
 const (
 	listenPort                     = 8080
 	powerDNSSubdomainAddressEnvKey = "ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS"
+
+	isuDNSServer = "ISUCON13_ISUDNS_SERVER_ADDRESS"
 )
 
 var (
 	powerDNSSubdomainAddress string
 	dbConn                   *sqlx.DB
 	secret                   = []byte("isucon13_session_cookiestore_defaultsecret")
+
+	isuDNSServerAddress string
 )
 
 func init() {
@@ -199,6 +203,13 @@ func main() {
 		os.Exit(1)
 	}
 	powerDNSSubdomainAddress = subdomainAddr
+
+	isuDNSServerAddr, ok := os.LookupEnv(isuDNSServer)
+	if !ok {
+		e.Logger.Errorf("environ %s must be provided", isuDNSServer)
+		os.Exit(1)
+	}
+	isuDNSServerAddress = isuDNSServerAddr
 
 	// HTTPサーバ起動
 	listenAddr := net.JoinHostPort("", strconv.Itoa(listenPort))
